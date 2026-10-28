@@ -40,16 +40,81 @@ h1, h2, h3, h4, h5, h6,
 [data-testid="stMarkdownContainer"], [data-testid="stCaptionContainer"] {
     color: #000000 !important;
 }
-[data-baseweb="select"] > div {
+[data-testid="stSidebar"] [data-baseweb="select"],
+[data-testid="stSidebar"] [data-baseweb="select"] > div,
+[data-testid="stSidebar"] [data-baseweb="select"] input {
     background-color: #ffffff !important;
     color: #000000 !important;
-    border: 1px solid #000000 !important;
 }
-[data-baseweb="tag"] {
-    background-color: #1f3a5f !important;
+[data-testid="stSidebar"] [data-baseweb="select"] > div {
+    border: 2px solid #0a1a4f !important;
+    border-radius: 8px !important;
 }
-[data-baseweb="tag"] span {
+[data-baseweb="select"] svg {
+    fill: #0a1a4f !important;
+    color: #0a1a4f !important;
+}
+[data-baseweb="select"] [data-baseweb="tag"] {
+    background-color: #0a1a4f !important;
+    border-radius: 6px !important;
+}
+[data-baseweb="select"] [data-baseweb="tag"] * {
+    background-color: transparent !important;
     color: #ffffff !important;
+    fill: #ffffff !important;
+}
+[data-baseweb="popover"], [data-baseweb="popover"] ul,
+[data-baseweb="popover"] li, [data-baseweb="menu"] {
+    background-color: #ffffff !important;
+    color: #000000 !important;
+}
+[data-baseweb="popover"] li:hover { background-color: #e3f2ff !important; }
+
+/* ---------- Hero header ---------- */
+.hero {
+    display: flex; flex-wrap: wrap; align-items: center;
+    justify-content: space-between; gap: 28px;
+    padding: 38px 42px;
+    border: 3px solid transparent;
+    border-radius: 18px;
+    background:
+        linear-gradient(135deg, #e3f2ff 0%, #ffffff 70%) padding-box,
+        linear-gradient(90deg, #d6126f, #7b2ff7) border-box;
+}
+.hero-left { flex: 1 1 440px; }
+.hero-right { flex: 0 1 340px; min-width: 260px; }
+.stApp .hero .hero-eyebrow {
+    font-size: 0.8rem; font-weight: 700; letter-spacing: 0.14em;
+    text-transform: uppercase; color: #7b2ff7 !important;
+}
+.stApp .hero .hero-title {
+    font-size: clamp(2rem, 4.2vw, 3.3rem); font-weight: 800;
+    line-height: 1.1; color: #0a1a4f !important; margin: 8px 0 14px 0;
+}
+.stApp .hero .hero-sub {
+    font-size: 1.05rem; color: #0a1a4f !important;
+    max-width: 640px; margin-bottom: 22px;
+}
+.stApp .hero .pill-grad {
+    display: inline-block; color: #ffffff !important; font-weight: 700;
+    background: linear-gradient(90deg, #d6126f, #7b2ff7);
+    padding: 10px 20px; border-radius: 8px; margin: 0 10px 10px 0;
+}
+.stApp .hero .pill-out {
+    display: inline-block; color: #0a1a4f !important; font-weight: 600;
+    background: #ffffff; border: 2px solid #0a1a4f;
+    padding: 8px 16px; border-radius: 8px; margin: 0 10px 10px 0;
+}
+.hero-frame {
+    border: 3px solid #0a1a4f; border-radius: 12px;
+    background: #ffffff; padding: 12px 14px;
+}
+.stApp .hero .hero-frame-label {
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; color: #0a1a4f !important;
+}
+.stApp .hero .hero-frame-foot {
+    font-size: 0.78rem; color: #444444 !important; margin-top: 4px;
 }
 [data-testid="stPlotlyChart"] {
     border: 1px solid #000000;
@@ -206,17 +271,70 @@ def compute_reliability(actuals: pd.DataFrame, preds: pd.DataFrame):
     return merged, reliability, mae
 
 
+def sparkline_svg(values, w=320, h=110, pad=8) -> str:
+    """Tiny inline SVG line chart for the hero panel."""
+    lo, hi = min(values), max(values)
+    span = (hi - lo) or 1
+    n = len(values) - 1
+    pts = [
+        (pad + i * (w - 2 * pad) / n, pad + (hi - v) / span * (h - 2 * pad))
+        for i, v in enumerate(values)
+    ]
+    line = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+    area = f"{pad},{h - pad} {line} {w - pad},{h - pad}"
+    lx, ly = pts[-1]
+    return (
+        f'<svg viewBox="0 0 {w} {h}" width="100%" xmlns="http://www.w3.org/2000/svg">'
+        f'<polygon points="{area}" fill="#d6126f" fill-opacity="0.12"/>'
+        f'<polyline points="{line}" fill="none" stroke="#0a1a4f" stroke-width="2.5" stroke-linejoin="round"/>'
+        f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="5" fill="#d6126f" stroke="#ffffff" stroke-width="2"/>'
+        "</svg>"
+    )
+
+
+def build_hero(actuals: pd.DataFrame, now: pd.Timestamp) -> str:
+    live_pill = ""
+    panel = ""
+    if not actuals.empty:
+        past = actuals[actuals["timestamp"] <= now]
+        base = past if len(past) >= 2 else actuals
+        live = base.iloc[-1]
+        zone = categorize(live["price_eur_mwh"])
+        live_pill = (
+            f'<span class="pill-grad">Live now: {live["price_eur_mwh"]:,.0f} € / MWh &nbsp;|&nbsp; {zone}</span>'
+        )
+        recent = base["price_eur_mwh"].tail(48).tolist()
+        if len(recent) >= 2:
+            panel = (
+                '<div class="hero-right"><div class="hero-frame">'
+                '<div class="hero-frame-label">Last 48 hours, €/MWh</div>'
+                f"{sparkline_svg(recent)}"
+                f'<div class="hero-frame-foot">Low {min(recent):,.0f} € &nbsp;|&nbsp; High {max(recent):,.0f} €</div>'
+                "</div></div>"
+            )
+    return (
+        '<div class="hero"><div class="hero-left">'
+        '<div class="hero-eyebrow">Energy intelligence &middot; Germany</div>'
+        '<div class="hero-title">Smart Factory: Understanding the Energy Grid</div>'
+        '<div class="hero-sub">Hourly day-ahead electricity prices with a 48-hour forecast, '
+        "so heavy machinery can run when power is cheapest.</div>"
+        f"{live_pill}"
+        '<span class="pill-out">Source: SMARD, Bundesnetzagentur</span>'
+        '<span class="pill-out">Updated daily</span>'
+        '<span class="pill-out">Berlin time</span>'
+        f"</div>{panel}</div>"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Dashboard
 # ---------------------------------------------------------------------------
 def main():
     actuals, preds = load_all_data()
 
-    st.title("Smart Factory: Understanding the Energy Grid")
-    st.caption(
-        "Hourly German day-ahead electricity prices (SMARD, Bundesnetzagentur) "
-        "with a 48-hour forecast. All times in Berlin time."
-    )
+    now = pd.Timestamp.now(tz=TZ)
+    st.markdown(build_hero(actuals, now), unsafe_allow_html=True)
+    st.write("")
 
     if actuals.empty:
         st.warning("No price data found yet. Run the 'Daily data sync' workflow on GitHub and refresh.")
