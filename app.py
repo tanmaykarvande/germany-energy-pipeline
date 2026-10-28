@@ -1,141 +1,412 @@
 import streamlit as st
 import pandas as pd
-from supabase import create_client, Client
 import plotly.express as px
 import plotly.graph_objects as go
-import numpy as np
+from supabase import create_client, Client
 
-#Connecting Database
-SUPABASE_URL = st.secrets["SUPABASE_URL"].strip()
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"].strip()
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# ---------------------------------------------------------------------------
+# Page configuration (must be the first Streamlit call)
+# ---------------------------------------------------------------------------
+st.set_page_config(
+    page_title="Smart Factory: Understanding the Energy Grid",
+    layout="wide",
+    page_icon="⚡",
+)
 
-#Configuration
-st.set_page_config(page_title="Industrial AI Command Center", layout="wide", page_icon="🏭")
+TZ = "Europe/Berlin"
+BLACK = "#000000"
+ACTUAL_COLOR = "#1f3a5f"      # deep navy
+FORECAST_COLOR = "#d97706"    # amber
+ZONE_COLORS = {
+    "Expensive": "#c0392b",
+    "Normal": "#e0a100",
+    "Cheap": "#2e8b57",
+    "(?)": "#d9d9d9",
+}
+
+# ---------------------------------------------------------------------------
+# Styling: white background, black text, bordered charts and cards
+# ---------------------------------------------------------------------------
+CSS = """
+.stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
+    background-color: #ffffff !important;
+}
+[data-testid="stSidebar"], [data-testid="stSidebar"] > div {
+    background-color: #f4f4f4 !important;
+    border-right: 1px solid #000000;
+}
+.stApp, .stApp p, .stApp span, .stApp label, .stApp li,
+h1, h2, h3, h4, h5, h6,
+[data-testid="stMarkdownContainer"], [data-testid="stCaptionContainer"] {
+    color: #000000 !important;
+}
+[data-baseweb="select"] > div {
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    border: 1px solid #000000 !important;
+}
+[data-baseweb="tag"] {
+    background-color: #1f3a5f !important;
+}
+[data-baseweb="tag"] span {
+    color: #ffffff !important;
+}
+[data-testid="stPlotlyChart"] {
+    border: 1px solid #000000;
+    border-radius: 6px;
+    padding: 8px;
+    background-color: #ffffff;
+}
+hr { border-color: #000000 !important; opacity: 0.25; }
+
+.kpi {
+    border: 1px solid #000000;
+    border-radius: 6px;
+    padding: 14px 16px;
+    background: #ffffff;
+    height: 100%;
+}
+.kpi-label { font-size: 0.85rem; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; }
+.kpi-value { font-size: 1.9rem; font-weight: 700; line-height: 1.25; }
+.kpi-sub   { font-size: 0.8rem; color: #444444 !important; }
+
+.opt-box {
+    border: 2px solid #000000;
+    border-radius: 8px;
+    padding: 18px 22px;
+    background: #ffffff;
+}
+.opt-title {
+    font-size: 1.35rem;
+    font-weight: 800;
+    border-bottom: 2px solid #000000;
+    padding-bottom: 8px;
+    margin-bottom: 12px;
+}
+.opt-row {
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    padding: 6px 0;
+    border-bottom: 1px solid #dddddd;
+    font-size: 1.05rem;
+}
+.opt-row:last-child { border-bottom: none; }
+.opt-label { font-weight: 600; }
+.opt-value { font-weight: 700; }
+"""
+st.markdown(f"<style>{CSS}</style>", unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# Database connection
+# ---------------------------------------------------------------------------
+@st.cache_resource
+def get_client() -> Client:
+    url = st.secrets["SUPABASE_URL"].strip()
+    key = st.secrets["SUPABASE_KEY"].strip()
+    return create_client(url, key)
+
+
+def categorize(price: float) -> str:
+    if price > 120:
+        return "Expensive"
+    if price < 60:
+        return "Cheap"
+    return "Normal"
+
 
 @st.cache_data(ttl=60)
 def load_all_data():
-    #Fetching data from dataset
-    res_a = supabase.table("energy_prices").select("*").order("timestamp", desc=True).limit(1500).execute()
-    res_p = supabase.table("price_predictions").select("*").order("timestamp", desc=True).limit(300).execute()
-    
+    sb = get_client()
+    res_a = (
+        sb.table("energy_prices").select("*")
+        .order("timestamp", desc=True).limit(1500).execute()
+    )
+    res_p = (
+        sb.table("price_predictions").select("*")
+        .order("timestamp", desc=True).limit(300).execute()
+    )
+
+    # Actual prices
     df_a = pd.DataFrame(res_a.data)
     if not df_a.empty:
-        df_a['timestamp'] = pd.to_datetime(df_a['timestamp'])
-        df_a['price_eur_mwh'] = pd.to_numeric(df_a['price_eur_mwh'], errors='coerce')
-        # Null Value Fixation
-        df_a = df_a.sort_values('timestamp')
-        df_a['price_eur_mwh'] = df_a['price_eur_mwh'].ffill().fillna(0)
-        df_a['Year'] = df_a['timestamp'].dt.year
-        df_a['Month'] = df_a['timestamp'].dt.strftime('%B')
-        df_a['Day'] = df_a['timestamp'].dt.day_name()
-        df_a['Date'] = df_a['timestamp'].dt.date
-        df_a['Hour'] = df_a['timestamp'].dt.hour
-        
-        def categorize(p):
-            if p > 120: return '🔴 Expensive'
-            if p < 60: return '🟢 Cheap'
-            return '🟡 Normal'
-        df_a['Status_Zone'] = df_a['price_eur_mwh'].apply(categorize)
+        df_a["timestamp"] = pd.to_datetime(df_a["timestamp"], utc=True).dt.tz_convert(TZ)
+        df_a["price_eur_mwh"] = pd.to_numeric(df_a["price_eur_mwh"], errors="coerce")
+        df_a = df_a.sort_values("timestamp").reset_index(drop=True)
+        df_a["price_eur_mwh"] = df_a["price_eur_mwh"].ffill().fillna(0)
+        df_a["Year"] = df_a["timestamp"].dt.year
+        df_a["Month"] = df_a["timestamp"].dt.strftime("%B")
+        df_a["Day"] = df_a["timestamp"].dt.day_name()
+        df_a["Hour"] = df_a["timestamp"].dt.hour
+        df_a["Status_Zone"] = df_a["price_eur_mwh"].apply(categorize)
 
-    # Prediction
+    # Forecast
     df_p = pd.DataFrame(res_p.data) if res_p.data else pd.DataFrame()
     if not df_p.empty:
-        df_p['timestamp'] = pd.to_datetime(df_p['timestamp'])
-        df_p['predicted_price'] = pd.to_numeric(df_p['predicted_price'], errors='coerce').ffill()
-        df_p = df_p.sort_values('timestamp')
+        df_p["timestamp"] = pd.to_datetime(df_p["timestamp"], utc=True).dt.tz_convert(TZ)
+        df_p["predicted_price"] = pd.to_numeric(df_p["predicted_price"], errors="coerce").ffill()
+        df_p = df_p.sort_values("timestamp").reset_index(drop=True)
 
     return df_a, df_p
 
-try:
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def card(label: str, value: str, sub: str = "") -> str:
+    return (
+        f'<div class="kpi"><div class="kpi-label">{label}</div>'
+        f'<div class="kpi-value">{value}</div>'
+        f'<div class="kpi-sub">{sub}</div></div>'
+    )
+
+
+def style_fig(fig, x_title=None, y_title=None, height=430, axes=True):
+    """Apply the white / black / bordered look to a Plotly figure."""
+    fig.update_layout(
+        template="plotly_white",
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        font=dict(color=BLACK, size=13),
+        height=height,
+        margin=dict(l=60, r=30, t=50, b=60),
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0,
+            bgcolor="white", bordercolor=BLACK, borderwidth=1,
+            font=dict(color=BLACK),
+        ),
+        hoverlabel=dict(bgcolor="white", font_color=BLACK),
+    )
+    if axes:
+        axis_style = dict(
+            showline=True, linecolor=BLACK, linewidth=1, mirror=True,
+            gridcolor="#e6e6e6", ticks="outside",
+            tickfont=dict(color=BLACK), title_font=dict(color=BLACK),
+        )
+        fig.update_xaxes(title_text=x_title, **axis_style)
+        fig.update_yaxes(title_text=y_title, **axis_style)
+    return fig
+
+
+def compute_reliability(actuals: pd.DataFrame, preds: pd.DataFrame):
+    """Return (merged dataframe, reliability %, MAE) for overlapping hours."""
+    if preds.empty:
+        return pd.DataFrame(), None, None
+    merged = pd.merge(
+        actuals[["timestamp", "price_eur_mwh"]],
+        preds[["timestamp", "predicted_price"]],
+        on="timestamp", how="inner",
+    )
+    if merged.empty:
+        return merged, None, None
+    mae = (merged["price_eur_mwh"] - merged["predicted_price"]).abs().mean()
+    mean_price = actuals["price_eur_mwh"].mean()
+    reliability = max(0.0, 100 - (mae / mean_price * 100)) if mean_price else 0.0
+    return merged, reliability, mae
+
+
+# ---------------------------------------------------------------------------
+# Dashboard
+# ---------------------------------------------------------------------------
+def main():
     actuals, preds = load_all_data()
-    
-    #Inserting Slicers
-    st.sidebar.header("🎯 Navigation & Filters")
-    years = sorted(actuals['Year'].unique())
-    selected_year = st.sidebar.multiselect("Select Year", years, default=years)
-    months = list(actuals.sort_values('timestamp')['Month'].unique())
-    selected_month = st.sidebar.multiselect("Select Month", months, default=months)
-    
-    # Apply Filtering
-    mask = (actuals['Year'].isin(selected_year)) & (actuals['Month'].isin(selected_month))
-    filtered_actuals = actuals.loc[mask]
-    filtered_actuals = filtered_actuals.copy()
-    filtered_actuals['Hours'] = 1
 
-    #UI/UX of the page
-    st.title("🏭 Smart Factory: AI Energy Hub")
-    
-    #KPI Insertion
-    if not filtered_actuals.empty:
-        latest_p = float(filtered_actuals['price_eur_mwh'].iloc[-1])
-        avg_p = float(filtered_actuals['price_eur_mwh'].mean())
-        
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Live Market Price", f"{latest_p:,.0f} €")
-        c2.metric("Filtered Avg", f"{avg_p:,.0f} €")
-        c3.metric("Peak Price", f"{filtered_actuals['price_eur_mwh'].max():,.0f} €")
-        
-        # Accuracy %
-        merged = pd.merge(actuals, preds, on='timestamp', how='inner')
-        if not merged.empty:
-            error = (merged['price_eur_mwh'] - merged['predicted_price']).abs().mean()
-            rel = max(0, 100 - (error / actuals['price_eur_mwh'].mean() * 100))
-            c4.metric("AI Reliability", f"{rel:.1f}%")
-        else:
-            c4.metric("AI Reliability", "Syncing...")
+    st.title("Smart Factory: Understanding the Energy Grid")
+    st.caption(
+        "Hourly German day-ahead electricity prices (SMARD, Bundesnetzagentur) "
+        "with a 48-hour forecast. All times in Berlin time."
+    )
 
-        #Trend chart
-        st.divider()
-        st.subheader("📈 Main Energy Trend")
-        fig_trend = px.line(filtered_actuals, x='timestamp', y='price_eur_mwh', 
-                           template="plotly_dark", color_discrete_sequence=['#00f2ff'])
-        if not preds.empty:
-            future_preds = preds[preds['timestamp'] > filtered_actuals['timestamp'].max()]
-            fig_trend.add_trace(go.Scatter(x=future_preds['timestamp'], y=future_preds['predicted_price'], 
-                                         name='Future AI Forecast', line=dict(color='magenta', dash='dash')))
-        st.plotly_chart(fig_trend, use_container_width=True)
+    if actuals.empty:
+        st.warning("No price data found yet. Run the 'Daily data sync' workflow on GitHub and refresh.")
+        return
 
-        #Acutal vs Predicted
-        st.divider()
-        st.subheader("🎯 Model Performance: Predicted vs. Real (Historical)")
-        if not merged.empty:
-            fig_acc = go.Figure()
-            fig_acc.add_trace(go.Scatter(x=merged['timestamp'], y=merged['price_eur_mwh'], name='Real Price', line=dict(color='#00f2ff')))
-            fig_acc.add_trace(go.Scatter(x=merged['timestamp'], y=merged['predicted_price'], name='AI Guess', line=dict(color='magenta', dash='dot')))
-            fig_acc.update_layout(template="plotly_dark", xaxis_title="Time", yaxis_title="Price (€)")
-            st.plotly_chart(fig_acc, use_container_width=True)
-        else:
-            st.info("The AI comparison chart will populate once your actual data catches up to your stored predictions.")
+    # ---- Sidebar filters ----
+    st.sidebar.header("Filters")
+    years = sorted(actuals["Year"].unique())
+    selected_year = st.sidebar.multiselect("Year", years, default=years)
+    months = list(actuals["Month"].unique())
+    selected_month = st.sidebar.multiselect("Month", months, default=months)
 
-        #Core Analysis
-        st.divider()
-        col_l, col_r = st.columns(2)
-        with col_l:
-            st.subheader("🌀 Hierarchy (Sunburst)")
-            fig_sun = px.sunburst(filtered_actuals, path=['Year', 'Month', 'Status_Zone'], values='Hours',
-                                 color='Status_Zone', color_discrete_map={'🔴 Expensive':'#ff4b4b', '🟡 Normal':'#ffa500', '🟢 Cheap':'#00d400'})
-            st.plotly_chart(fig_sun, use_container_width=True)
-        with col_r:
-            st.subheader("🌳 Distribution (Treemap)")
-            fig_tree = px.treemap(filtered_actuals, path=['Status_Zone'], values='Hours',
-                                 color='Status_Zone', color_discrete_map={'🔴 Expensive':'#ff4b4b', '🟡 Normal':'#ffa500', '🟢 Cheap':'#00d400'})
-            st.plotly_chart(fig_tree, use_container_width=True)
+    mask = actuals["Year"].isin(selected_year) & actuals["Month"].isin(selected_month)
+    fa = actuals.loc[mask].copy().reset_index(drop=True)
+    fa["Hours"] = 1
 
-        #Heatamp
-        st.divider()
-        st.subheader("🔥 Price Intensity Heatmap")
-        day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-        heatmap_data = filtered_actuals.pivot_table(index='Hour', columns='Day', values='price_eur_mwh', aggfunc='mean')
-        heatmap_data = heatmap_data.reindex(columns=[d for d in day_order if d in heatmap_data.columns])
-        fig_heat = px.imshow(heatmap_data, color_continuous_scale='RdYlGn_r', aspect="auto")
-        st.plotly_chart(fig_heat, use_container_width=True)
+    if fa.empty:
+        st.warning("No data for the selected filters. Choose at least one year and one month.")
+        return
 
-        future_only = preds[preds['timestamp'] > actuals['timestamp'].max()]
-        if not future_only.empty:
-            best_row = future_only.sort_values('predicted_price').iloc[0]
-            st.success(f"### 🤖 AI Strategy: Optimal window at **{best_row['timestamp'].strftime('%H:%M on %A')}** ({best_row['predicted_price']:,.0f} €)")
-            
+    now = pd.Timestamp.now(tz=TZ)
+    merged, reliability, mae = compute_reliability(actuals, preds)
 
+    # ---- KPI cards ----
+    past = fa[fa["timestamp"] <= now]
+    live_row = past.iloc[-1] if not past.empty else fa.iloc[-1]
+    peak_row = fa.loc[fa["price_eur_mwh"].idxmax()]
+    last_ts = actuals["timestamp"].max()
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(
+        card("Live Market Price", f"{live_row['price_eur_mwh']:,.0f} €",
+             f"€/MWh at {live_row['timestamp'].strftime('%H:%M, %d %b')}"),
+        unsafe_allow_html=True,
+    )
+    c2.markdown(
+        card("Filtered Average", f"{fa['price_eur_mwh'].mean():,.0f} €", "€/MWh for selected period"),
+        unsafe_allow_html=True,
+    )
+    c3.markdown(
+        card("Peak Price", f"{peak_row['price_eur_mwh']:,.0f} €",
+             f"€/MWh on {peak_row['timestamp'].strftime('%d %b, %H:%M')}"),
+        unsafe_allow_html=True,
+    )
+    c4.markdown(
+        card("Data Last Updated", last_ts.strftime("%d %b %Y"),
+             f"Latest hour loaded: {last_ts.strftime('%H:%M %Z')}"),
+        unsafe_allow_html=True,
+    )
+
+    # ---- Optimal window box ----
+    st.write("")
+    future = preds[preds["timestamp"] > now] if not preds.empty else pd.DataFrame()
+    if not future.empty:
+        best = future.sort_values("predicted_price").iloc[0]
+        when = best["timestamp"].strftime("%H:%M, %A, %d %B %Y")
+        price_txt = f"{best['predicted_price']:,.0f} € / MWh"
+        rel_txt = f"{reliability:.1f}%" if reliability is not None else "Syncing..."
+        st.markdown(
+            '<div class="opt-box">'
+            '<div class="opt-title">Optimal Window</div>'
+            f'<div class="opt-row"><span class="opt-label">Estimated Time and Day</span><span class="opt-value">{when}</span></div>'
+            f'<div class="opt-row"><span class="opt-label">Estimated Price</span><span class="opt-value">{price_txt}</span></div>'
+            f'<div class="opt-row"><span class="opt-label">Forecast Reliability</span><span class="opt-value">{rel_txt}</span></div>'
+            "</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            '<div class="opt-box"><div class="opt-title">Optimal Window</div>'
+            '<div class="opt-row"><span class="opt-label">No upcoming forecast available yet</span></div></div>',
+            unsafe_allow_html=True,
+        )
+
+    # ---- Trend chart ----
+    st.divider()
+    st.subheader("Main Energy Trend")
+    fig_trend = go.Figure()
+    fig_trend.add_trace(go.Scatter(
+        x=fa["timestamp"], y=fa["price_eur_mwh"], mode="lines",
+        name="Actual price", line=dict(color=ACTUAL_COLOR, width=2),
+        hovertemplate="%{x|%d %b %H:%M}<br>%{y:,.1f} €/MWh<extra>Actual</extra>",
+    ))
+    if not preds.empty:
+        fut = preds[preds["timestamp"] > fa["timestamp"].max()]
+        if not fut.empty:
+            fig_trend.add_trace(go.Scatter(
+                x=fut["timestamp"], y=fut["predicted_price"], mode="lines",
+                name="Forecast", line=dict(color=FORECAST_COLOR, width=2, dash="dash"),
+                hovertemplate="%{x|%d %b %H:%M}<br>%{y:,.1f} €/MWh<extra>Forecast</extra>",
+            ))
+    low_row = fa.loc[fa["price_eur_mwh"].idxmin()]
+    fig_trend.add_trace(go.Scatter(
+        x=[peak_row["timestamp"]], y=[peak_row["price_eur_mwh"]],
+        mode="markers+text", name="Peak",
+        marker=dict(color=ZONE_COLORS["Expensive"], size=11, line=dict(color=BLACK, width=1)),
+        text=[f"Peak: {peak_row['price_eur_mwh']:,.0f} €"], textposition="top center",
+        textfont=dict(color=BLACK),
+    ))
+    fig_trend.add_trace(go.Scatter(
+        x=[low_row["timestamp"]], y=[low_row["price_eur_mwh"]],
+        mode="markers+text", name="Lowest",
+        marker=dict(color=ZONE_COLORS["Cheap"], size=11, line=dict(color=BLACK, width=1)),
+        text=[f"Low: {low_row['price_eur_mwh']:,.0f} €"], textposition="bottom center",
+        textfont=dict(color=BLACK),
+    ))
+    fig_trend.add_hline(y=120, line_dash="dot", line_color=ZONE_COLORS["Expensive"],
+                        annotation_text="Expensive above 120 €", annotation_position="top left",
+                        annotation_font_color=BLACK)
+    fig_trend.add_hline(y=60, line_dash="dot", line_color=ZONE_COLORS["Cheap"],
+                        annotation_text="Cheap below 60 €", annotation_position="bottom left",
+                        annotation_font_color=BLACK)
+    style_fig(fig_trend, x_title="Time", y_title="Price (€/MWh)", height=480)
+    st.plotly_chart(fig_trend, use_container_width=True)
+
+    # ---- Actual vs predicted ----
+    st.divider()
+    st.subheader("Model Performance: Forecast vs. Actual (Historical)")
+    if not merged.empty:
+        fig_acc = go.Figure()
+        fig_acc.add_trace(go.Scatter(
+            x=merged["timestamp"], y=merged["price_eur_mwh"], mode="lines",
+            name="Actual price", line=dict(color=ACTUAL_COLOR, width=2),
+        ))
+        fig_acc.add_trace(go.Scatter(
+            x=merged["timestamp"], y=merged["predicted_price"], mode="lines",
+            name="Forecast", line=dict(color=FORECAST_COLOR, width=2, dash="dot"),
+        ))
+        style_fig(fig_acc, x_title="Time", y_title="Price (€/MWh)")
+        st.plotly_chart(fig_acc, use_container_width=True)
+        st.caption(
+            f"Mean absolute error: {mae:,.1f} €/MWh over {len(merged):,} overlapping hours "
+            f"(reliability {reliability:.1f}%)."
+        )
+    else:
+        st.info("The comparison chart will fill in once actual prices catch up with the stored forecasts.")
+
+    # ---- Sunburst and treemap ----
+    st.divider()
+    st.caption("Price zones: Cheap = below 60 €/MWh, Normal = 60 to 120 €/MWh, Expensive = above 120 €/MWh.")
+    col_l, col_r = st.columns(2)
+    with col_l:
+        st.subheader("Hierarchy (Sunburst)")
+        sun_df = fa.assign(Year=fa["Year"].astype(str))
+        fig_sun = px.sunburst(
+            sun_df, path=["Year", "Month", "Status_Zone"], values="Hours",
+            color="Status_Zone", color_discrete_map=ZONE_COLORS,
+        )
+        fig_sun.update_traces(
+            textinfo="label+percent parent",
+            marker=dict(line=dict(color="white", width=1)),
+            hovertemplate="%{label}<br>%{value} hours<extra></extra>",
+        )
+        style_fig(fig_sun, height=450, axes=False)
+        st.plotly_chart(fig_sun, use_container_width=True)
+    with col_r:
+        st.subheader("Distribution (Treemap)")
+        fig_tree = px.treemap(
+            fa, path=["Status_Zone"], values="Hours",
+            color="Status_Zone", color_discrete_map=ZONE_COLORS,
+        )
+        fig_tree.update_traces(
+            textinfo="label+value+percent root",
+            textfont=dict(size=16, color=BLACK),
+            marker=dict(line=dict(color="white", width=2)),
+            hovertemplate="%{label}<br>%{value} hours<extra></extra>",
+        )
+        style_fig(fig_tree, height=450, axes=False)
+        st.plotly_chart(fig_tree, use_container_width=True)
+
+    # ---- Heatmap ----
+    st.divider()
+    st.subheader("Price Intensity Heatmap (average €/MWh)")
+    day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    heat = fa.pivot_table(index="Hour", columns="Day", values="price_eur_mwh", aggfunc="mean")
+    heat = heat.reindex(columns=[d for d in day_order if d in heat.columns])
+    fig_heat = px.imshow(
+        heat, text_auto=".0f", color_continuous_scale="RdYlGn_r", aspect="auto",
+        labels=dict(x="Weekday", y="Hour of day", color="€/MWh"),
+    )
+    fig_heat.update_yaxes(dtick=1)
+    style_fig(fig_heat, x_title="Weekday", y_title="Hour of day", height=720)
+    fig_heat.update_layout(coloraxis_colorbar=dict(
+        title=dict(text="€/MWh", font=dict(color=BLACK)),
+        tickfont=dict(color=BLACK), outlinecolor=BLACK, outlinewidth=1,
+    ))
+    st.plotly_chart(fig_heat, use_container_width=True)
+
+
+try:
+    main()
 except Exception as e:
     st.error(f"Dashboard Error: {e}")
