@@ -55,13 +55,15 @@ h1, h2, h3, h4, h5, h6,
     color: #0a1a4f !important;
 }
 [data-baseweb="select"] [data-baseweb="tag"] {
-    background-color: #0a1a4f !important;
+    background-color: #e3f2ff !important;
+    border: 1px solid #0a1a4f !important;
     border-radius: 6px !important;
 }
 [data-baseweb="select"] [data-baseweb="tag"] * {
     background-color: transparent !important;
-    color: #ffffff !important;
-    fill: #ffffff !important;
+    color: #0a1a4f !important;
+    fill: #0a1a4f !important;
+    font-weight: 600 !important;
 }
 [data-baseweb="popover"], [data-baseweb="popover"] ul,
 [data-baseweb="popover"] li, [data-baseweb="menu"] {
