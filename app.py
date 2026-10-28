@@ -54,10 +54,13 @@ h1, h2, h3, h4, h5, h6,
     fill: #0a1a4f !important;
     color: #0a1a4f !important;
 }
-[data-baseweb="select"] [data-baseweb="tag"] {
+.stApp [data-baseweb="select"] [data-baseweb="tag"],
+.stApp span[data-baseweb="tag"] {
     background-color: #e3f2ff !important;
     border: 1px solid #0a1a4f !important;
     border-radius: 6px !important;
+    color: #0a1a4f !important;
+    font-weight: 600 !important;
 }
 [data-baseweb="select"] [data-baseweb="tag"] * {
     background-color: transparent !important;
