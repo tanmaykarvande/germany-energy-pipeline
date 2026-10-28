@@ -354,8 +354,6 @@ def main():
     months = list(actuals["Month"].unique())
     selected_month = st.sidebar.multiselect("Month", months, default=months)
 
-    st.sidebar.caption("Build v4 (light chips)")
-
     mask = actuals["Year"].isin(selected_year) & actuals["Month"].isin(selected_month)
     fa = actuals.loc[mask].copy().reset_index(drop=True)
     fa["Hours"] = 1
