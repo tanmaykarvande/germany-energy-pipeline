@@ -60,11 +60,13 @@ h1, h2, h3, h4, h5, h6,
     border: 1px solid #0a1a4f !important;
     border-radius: 6px !important;
     color: #0a1a4f !important;
+    -webkit-text-fill-color: #0a1a4f !important;
     font-weight: 600 !important;
 }
 [data-baseweb="select"] [data-baseweb="tag"] * {
     background-color: transparent !important;
     color: #0a1a4f !important;
+    -webkit-text-fill-color: #0a1a4f !important;
     fill: #0a1a4f !important;
     font-weight: 600 !important;
 }
@@ -351,6 +353,8 @@ def main():
     selected_year = st.sidebar.multiselect("Year", years, default=years)
     months = list(actuals["Month"].unique())
     selected_month = st.sidebar.multiselect("Month", months, default=months)
+
+    st.sidebar.caption("Build v4 (light chips)")
 
     mask = actuals["Year"].isin(selected_year) & actuals["Month"].isin(selected_month)
     fa = actuals.loc[mask].copy().reset_index(drop=True)
